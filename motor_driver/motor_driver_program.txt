@@ -1,0 +1,106 @@
+;%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+;LAM Technologies - 50019 Sesto Fiorentino (FI) ITALY - www.lamtechnologies.com
+;%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+;
+;UDP commander 1.73
+;
+; >>> Application Program details:
+;
+DESCRIPTION = ""
+   REVISION = "0.0"
+       NOTE = ""
+;
+; >>> Drive configuration - Fault:
+;
+   UNDERVOLTAGE = "Automatic"
+    OVERVOLTAGE = "Automatic"
+OVERTEMPERATURE = "Automatic"
+    PH_PH_SHORT = "ENABLE"
+   PH_GND_SHORT = "ENABLE"
+   PH_VPP_SHORT = "ENABLE"
+    PH_A_BROKEN = "ENABLE"
+    PH_B_BROKEN = "ENABLE"
+;
+; >>> Drive configuration - I Shape:
+;
+ ISHAPE = "0"
+IOFFSET = "0"
+;
+; >>> Drive configuration - Acceleration and Deceleration Coefficient:
+;
+ACCDECF = "1"
+;
+; >>> Drive configuration - User variables Retentive:
+;
+RETUVAR = "0"
+;
+; >>> Drive configuration - Analog Input used as Digital Input Threshold:
+;
+AI0SLG = "1.5"
+AI1SLG = "1.5"
+;
+; >>> User Variable:
+;
+VARIABLE = "microsteps_per_deg", 4    ;40961(0xA001)
+VARIABLE = "desired_deg", 4    ;40963(0xA003)
+VARIABLE = "desired_endposition", 4    ;40965(0xA005)
+;
+; >>> Application Program block:
+;
+;---------------------------------------------------------------> Block:1
+Assign {
+  Acceleration = 500
+  MaxVel = 500
+  Deceleration = 1500
+}
+;
+;
+;---------------------------------------------------------------> Block:2
+Assign {
+  microsteps_per_deg = 71
+  desired_deg = 365
+}
+  "71.1111"
+;
+;
+;---------------------------------------------------------------> Block:3
+  Resolve desired_endposition = microsteps_per_deg * desired_deg
+;
+;
+;---------------------------------------------------------------> Block:4
+Assign {
+  ControlMode = POSITION_CNTMD
+  bEnable = TRUE_BOOL
+}
+;
+;
+;---------------------------------------------------------------> Block:5
+mainLoop:
+Assign {
+  TargetPos = desired_endposition
+}
+;
+;
+;---------------------------------------------------------------> Block:6
+  Wait Until bInPosition = 1
+;
+;
+;---------------------------------------------------------------> Block:7
+Assign {
+  TargetPos = 0
+}
+;
+;
+;---------------------------------------------------------------> Block:8
+  Wait Until bInPosition = 1
+;
+;
+;---------------------------------------------------------------> Block:9
+  Jump to mainLoop always
+;
+;
+;
+;%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+;LAM Technologies - 50019 Sesto Fiorentino (FI) ITALY - www.lamtechnologies.com
+;%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+;24.07.2024 17:07:40
