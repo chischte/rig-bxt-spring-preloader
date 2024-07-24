@@ -60,16 +60,14 @@
  * SPECIAL EVENTS
  * --------------
  * 
- * TODO: •) After some time of inactivity, the Motor d
+ * •) DOOR opens while motor is running -> PLC sends emergency stop signal DRIVER!
  * 
- * TODO: •) DOOR opens early -> DRIVER stops MOTOR as fast as possible!
- * 
- * TODO: •) LENGTH sensor detects already when user closes door
+ * •) LENGTH sensor detects already when user closes door
  * -> Spring already compressed, MOTOR must not start to turn
  * 
- * TODO: •) LENGTH sensor or Angle Sensor does not detect normally
- * -> use timeout
+ * •) MOTOR runs to long
  * -> Mechanical or electrical malfungction, stop motor.
+ * -> use timeout
  * 
  * *****************************************************************************
  * RUNTIME ON CONTROLLINO MAXI
@@ -80,7 +78,7 @@
  * ----
  * TODO
  * ----
- * • ALL
+ * • -
  * *****************************************************************************
  * 
  * 
@@ -93,39 +91,61 @@
 
 Insomnia print_delay;
 
+int max_motor_runtime = 5000; // [ms]
+Insomnia motor_timeout(max_motor_runtime);
+
 // GLOBAL VARIABLES ------------------------------------------------------------
 
 // I/O-PINS:
 // INPUTS:
 
-
 // OUTPUT PINS:
-const byte MOTOR_ENABLE = CONTROLLINO_D0; // -------- LAM MOTOR CONTROLLER PIN CN3 - 1
-const byte MOTOR_STOP_PRECISE = CONTROLLINO_D1; // -- LAM MOTOR CONTROLLER PIN CN3 - 3
-const byte MOTOR_EMERGENCY_STOP = CONTROLLINO_D3;// - LAM MOTOR CONTROLLER PIN CN3 - 5
+const byte MOTOR_ENABLE = CONTROLLINO_D0; // --------- LAM MOTOR CONTROLLER PIN CN3 - 1
+const byte MOTOR_STOP_PRECISE = CONTROLLINO_D1; // --- LAM MOTOR CONTROLLER PIN CN3 - 3
+const byte MOTOR_EMERGENCY_STOP = CONTROLLINO_D2; // - LAM MOTOR CONTROLLER PIN CN3 - 5
+const byte MOTOR_START = CONTROLLINO_D3; // ---------- LAM MOTOR CONTROLLER PIN CN3 - 7
 
 // INPUT PINS
-const byte MOTOR_STOPPED = CONTROLLINO_A7;// -------- LAM MOTOR CONTROLLER PIN CN3 - 9
-const byte ANGLE_SENSOR = CONTROLLINO_A0;
-const byte LENGTH_SENSOR = CONTROLLINO_A1;// LAM MOTOR CONTROLLER PIN CN3
-Debounce door_sensor_front(CONTROLLINO_A2);
-Debounce door_sensor_rear (CONTROLLINO_A3);
+const byte MOTOR_STOPPED = CONTROLLINO_A5; // -------- LAM MOTOR CONTROLLER PIN CN3 - 9
+const byte LENGTH_SENSOR = CONTROLLINO_A1; // LAM MOTOR CONTROLLER PIN CN3
+const byte DOOR_SENSOR_FRONT = CONTROLLINO_A2;
+const byte DOOR_SENSOR_REAR = CONTROLLINO_A3;
+
+// INPUT INTERRUPT PINS
+const byte ANGLE_SENSOR = CONTROLLINO_IN0; // --> INTERRUPT PIN
 
 // INTERRUPT FOR ANGLE SENSOR
 volatile bool angle_calibrated = false;
-volatile unsigned int current_microstep_angle;
 
 // RUNTIME
 unsigned long runtime_start;
 
-// PROGRAM STAGE BOOLS
-bool sledge_is_in_start_position = true;
-bool safety_door_closed = false;
-bool endposition_calculated = false;
-bool deceleration_initiated = false;
-bool motor_stopped = false;
-
 // FUNCTIONS *******************************************************************
+
+bool safety_door_is_closed() {
+  bool safety_door_closed = false;
+  if (digitalRead(DOOR_SENSOR_FRONT) && digitalRead(DOOR_SENSOR_REAR)) {
+    safety_door_closed = true;
+  }
+  return safety_door_closed;
+}
+
+bool motor_has_stopped() {
+  bool motor_stopped = false;
+
+  if (digitalRead(MOTOR_STOPPED) == HIGH) {
+    motor_stopped = true;
+  }
+  return motor_stopped;
+}
+
+bool length_sensor_has_detected() {
+  bool sensor_detected = false;
+  if (digitalRead(LENGTH_SENSOR) == LOW) {
+    sensor_detected = true;
+  }
+  return sensor_detected;
+}
 
 void measure_runtime() {
 
@@ -181,35 +201,46 @@ void measure_runtime() {
   }
 }
 
-void monitor_sensors() {
-  if (door_sensor.switched_high()) {
-    safety_door_closed = true;
-  }
-  if (door_sensor.switched_low()) {
-    safety_door_closed = false;
-  }
-  if (length_sensor.switched_high()) {
-    sledge_is_in_start_position = false;
-  }
-  if (length_sensor.switched_low()) {
-    sledge_is_in_start_position = true;
-  }
+void set_motor_stop_flag() //
+{
+  digitalWrite(MOTOR_STOP_PRECISE, HIGH);
 }
 
+void reset_motor_stop_flag() //
+{
+  digitalWrite(MOTOR_STOP_PRECISE, LOW);
+}
 
-void run_motor() {
-  }
+void enable_motor() //
+{
+  digitalWrite(MOTOR_ENABLE, HIGH);
+}
 
-void stop_motor() {
- 
+void disable_motor() //
+{
+  digitalWrite(MOTOR_ENABLE, LOW);
+}
+
+void initiate_emergency_stop() {
+  enable_motor();
+  digitalWrite(MOTOR_EMERGENCY_STOP, LOW);
+}
+
+void disable_emergency_stop() //
+{
+  digitalWrite(MOTOR_EMERGENCY_STOP, HIGH);
+}
+
+void start_motor() //
+{
+  digitalWrite(MOTOR_START, HIGH);
 }
 
 // INTERRUPT FOR ANGLE CALIBRATION *********************************************
-
+// THE ISR RUNS EVERY TIME THE ANGLE SENSOR DETECTS A TURN.
 void isr_calibrate_angle() {
-  if (!angle_calibrated) {
-    current_microstep_angle = 0;
-    angle_calibrated = true;
+  if (length_sensor_has_detected()) {
+    set_motor_stop_flag();
   }
 }
 
@@ -220,10 +251,13 @@ void setup() {
   Serial.begin(115200);
 
   // INTERRUPT FOR ANGLE SENSOR
-  pinMode(CONTROLLINO_IN0, INPUT);
-  attachInterrupt(digitalPinToInterrupt(CONTROLLINO_IN0), isr_calibrate_angle, RISING);
+  pinMode(ANGLE_SENSOR, INPUT);
+  attachInterrupt(digitalPinToInterrupt(ANGLE_SENSOR), isr_calibrate_angle, RISING);
 
-  pinMode(MOTOR_STEP_PIN, OUTPUT);
+  // OUTPUT PINS
+  pinMode(MOTOR_ENABLE, OUTPUT);
+  pinMode(MOTOR_STOP_PRECISE, OUTPUT);
+  pinMode(MOTOR_EMERGENCY_STOP, OUTPUT);
 
   Serial.println("EXIT SETUP");
 }
@@ -234,55 +268,71 @@ void loop() {
 
   runtime_start = micros();
 
-  monitor_sensors();
+  enum stage_names { READY, ACCELERATE, BRAKE_IF_ISR, STOPPED, EMERGENCY_STOP, RESET };
+  static int stage = RESET;
 
-  static int stage = 0;
-
-  enum stage_names { READY, ACCELERATE, BRAKE, STOPPED, RESET };
+  // IF SAFETY DOOR IS NOT CLOSED !!!
+  // STOP MOTOR IMMEDIATELY       !!!
+  if (!safety_door_is_closed() && !motor_has_stopped()) {
+    Serial.println("EMERGENCY STOP !!!!!!!!!!!!!!!!!!!!!!!!!!!");
+    stage = EMERGENCY_STOP;
+  }
 
   switch (stage) {
 
   case READY:
-    if (safety_door_closed && sledge_is_in_start_position) {
+    disable_motor();
+
+    if (!length_sensor_has_detected() && safety_door_is_closed()) {
+      Serial.println("ACCELERATE!");
+      motor_timeout.reset_time();
       stage = ACCELERATE;
     }
     break;
 
   case ACCELERATE:
-    run_motor();
-
-    if (!safety_door_closed) {
-      stage = BRAKE;
-    }
-    if (angle_calibrated && !sledge_is_in_start_position && !endposition_calculated) {
-     
-    } else if (endposition_calculated && !deceleration_initiated) {
-      // is_looking_for_brakepoint = true;
-    }
-    if (deceleration_initiated) {
-      stage = BRAKE;
-    }
+    enable_motor();
+    start_motor();
+    Serial.println("BRAKE!");
+    motor_timeout.reset_time();
+    stage = BRAKE_IF_ISR;
     break;
 
-  case BRAKE:
-    stop_motor();
-    if (motor_stopped) {
-      // generate_stepper_signal = false;
+  case BRAKE_IF_ISR:
+
+    // ISR IS TELLING MOTOR CONTROLLER WHEN TO START DECELERATION
+
+    if (motor_timeout.has_timed_out()) {
+      Serial.println("TIMEOUT, EMERGENCY STOP!");
+      stage = EMERGENCY_STOP;
+    }
+
+    if (motor_has_stopped()) {
+      Serial.println("DECELERATION COMPLETED");
       stage = STOPPED;
     }
     break;
 
   case STOPPED:
-    if (!safety_door_closed) {
+    disable_motor();
+    Serial.println("MOTOR STOPPED");
+    stage = RESET;
+    break;
+
+  case EMERGENCY_STOP:
+    enable_motor();
+    initiate_emergency_stop();
+    if (motor_has_stopped()) {
       stage = RESET;
-    }
+    };
     break;
 
   case RESET:
-    deceleration_initiated = false;
-    motor_stopped = false;
-    stage = READY;
+    disable_motor();
+    disable_emergency_stop();
+    reset_motor_stop_flag();
     Serial.println("RESET COMPLETED, READY FOR NEXT RUN");
+    stage = READY;
     break;
 
   default:
