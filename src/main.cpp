@@ -7,21 +7,25 @@
  * Juli 2024, Zürich
  * 
  * *****************************************************************************
- * Program to control an assembly device that preloads a spring
- * using a screw joint
+ * Program to control an assembly aid device that preloads a spring by turning
+ * a threaded connection using a stepper motor.
  * 
  * The spring must always be compressed to the same length and the machine
- * must always stop at the desired angle
+ * must always stop at the desired angle.
+ * 
+ * PLC runtime should be small, preferably <100us, so that angle measurements
+ * are precise enough.
  * 
  * *****************************************************************************
- * ELEMENTS
+ * COMPONENTS
  * *****************************************************************************
  * 
- * PLC ----> Controllino Maxi PLC ----> monitors sensors for safety and position
+ * PLC ----> Controllino Maxi --------> monitors sensors for safety and position
  * DRIVER -> LAM DS3078 Motor Driver -> accelerates and decelerates stepper motor
  * MOTOR --> NEMA34 Stepper ----------> turns screw joint to compress spring to 
  *                                      desired length and angle
- * DOOR ---> Sensor to detect if safety door is closed
+ * 
+ * DOOR ---> Sensors to detect if safety door is closed
  * LENGTH -> Sensor to detect if thread is at a certain length
  * ANGLE --> Sensor to detect a fixed angle at every motor turn
  * 
@@ -31,31 +35,41 @@
  * ----------------
  * NORMAL OPERATION
  * ----------------
- * 0) USER CLOSES DOOR
+ * •) USER CLOSES DOOR
  * 
- * 1) PLC checks that DOOR is closed and LENGTH does not detect
- *    -> Thread is in start position and the spring not preloaded yet
+ * •) PLC checks if DOOR is closed and LENGTH sensor does not detect yet
  * 
- * 2) PLC informs DRIVER to accelerate MOTOR
+ * •) PLC enables informs DRIVER to enabble and accelerate MOTOR
  * 
- * 3) PLC detects LENGTH -> PLC waits for next ANGLE
+ * •) PLC detects LENGTH -> PLC waits for next ANGLE
  *
- * 4) PLC detects ANGLE -> DRIVER calculates and sets target position
+ * •) PLC detects ANGLE -> DRIVER calculates and sets target position
+ *    -> keep in loop calculations as slim as possible
  *
- * 5) DRIVER stops MOTOR at target position
- *
- * 6) DRIVER resets
+ * •) DRIVER stops MOTOR at target position
  * 
- * 7) USER opens DOOR -> PLC resets
+ * •) DRIVER informs PLC that MOTOR stopped
+ * 
+ * •) PLC disables MOTOR
+ *
+ * •) DRIVER resets
+ * 
+ * •) USER opens DOOR -> PLC resets
  * 
  * --------------  
  * SPECIAL EVENTS
  * --------------
  * 
- * A) DOOR opens early -> DRIVER stops MOTOR as fast as possible!
+ * TODO: •) After some time of inactivity, the Motor d
  * 
- * B) LENGTH sensor detects already when user closes door
- *    -> MOTOR must not start to turn
+ * TODO: •) DOOR opens early -> DRIVER stops MOTOR as fast as possible!
+ * 
+ * TODO: •) LENGTH sensor detects already when user closes door
+ * -> Spring already compressed, MOTOR must not start to turn
+ * 
+ * TODO: •) LENGTH sensor or Angle Sensor does not detect normally
+ * -> use timeout
+ * -> Mechanical or electrical malfungction, stop motor.
  * 
  * *****************************************************************************
  * RUNTIME ON CONTROLLINO MAXI
@@ -66,8 +80,7 @@
  * ----
  * TODO
  * ----
- * • Implement second door sensor
- * • Implement Motor driver
+ * • ALL
  * *****************************************************************************
  * 
  * 
@@ -84,12 +97,19 @@ Insomnia print_delay;
 
 // I/O-PINS:
 // INPUTS:
-Debounce angle_sensor(CONTROLLINO_A0);
-Debounce length_sensor(CONTROLLINO_A1);
-Debounce door_sensor(CONTROLLINO_A2);
 
-// OUTPUTS:
-const byte MOTOR_STEP_PIN = CONTROLLINO_D3;
+
+// OUTPUT PINS:
+const byte MOTOR_ENABLE = CONTROLLINO_D0; // -------- LAM MOTOR CONTROLLER PIN CN3 - 1
+const byte MOTOR_STOP_PRECISE = CONTROLLINO_D1; // -- LAM MOTOR CONTROLLER PIN CN3 - 3
+const byte MOTOR_EMERGENCY_STOP = CONTROLLINO_D3;// - LAM MOTOR CONTROLLER PIN CN3 - 5
+
+// INPUT PINS
+const byte MOTOR_STOPPED = CONTROLLINO_A7;// -------- LAM MOTOR CONTROLLER PIN CN3 - 9
+const byte ANGLE_SENSOR = CONTROLLINO_A0;
+const byte LENGTH_SENSOR = CONTROLLINO_A1;// LAM MOTOR CONTROLLER PIN CN3
+Debounce door_sensor_front(CONTROLLINO_A2);
+Debounce door_sensor_rear (CONTROLLINO_A3);
 
 // INTERRUPT FOR ANGLE SENSOR
 volatile bool angle_calibrated = false;
@@ -259,11 +279,7 @@ void loop() {
     break;
 
   case RESET:
-    angle_calibrated = false;
-    sledge_is_in_start_position = true;
-    endposition_calculated = false;
     deceleration_initiated = false;
-    // is_looking_for_brakepoint = false;
     motor_stopped = false;
     stage = READY;
     Serial.println("RESET COMPLETED, READY FOR NEXT RUN");
