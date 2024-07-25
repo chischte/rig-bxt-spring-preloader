@@ -16,6 +16,15 @@
  * PLC runtime should be small, preferably <100us, so that angle measurements
  * are precise enough.
  * 
+ * The maximum possible turns on the thread are 23.5, if the motor turns more often
+ * the parts crash mechanically
+ * 
+ * The desired number of turns for the correct spring length of 40.5 are:
+ *  11.5 turns
+ * 
+ * The steper driver is therefore limited to make maximum 16 Turns
+ * 16 Turns x 128 microsteps per step x 200 steps per turn = Max position 409600
+ * 
  * *****************************************************************************
  * COMPONENTS
  * *****************************************************************************
@@ -100,10 +109,10 @@ Insomnia motor_timeout(max_motor_runtime);
 // INPUTS:
 
 // OUTPUT PINS:
-const byte MOTOR_ENABLE = CONTROLLINO_D0; // --------- LAM MOTOR CONTROLLER PIN CN3 - 1
-const byte MOTOR_STOP_PRECISE = CONTROLLINO_D1; // --- LAM MOTOR CONTROLLER PIN CN3 - 3
-const byte MOTOR_EMERGENCY_STOP = CONTROLLINO_D2; // - LAM MOTOR CONTROLLER PIN CN3 - 5
-const byte MOTOR_START = CONTROLLINO_D3; // ---------- LAM MOTOR CONTROLLER PIN CN3 - 7
+const byte MOTOR_ENABLE = CONTROLLINO_D0; // --------- LAM MOTOR CONTROLLER PIN CN3 - PIN1 (DI0)
+const byte MOTOR_STOP_PRECISE = CONTROLLINO_D1; // --- LAM MOTOR CONTROLLER PIN CN3 - PIN3 (DI1)
+const byte MOTOR_EMERGENCY_STOP = CONTROLLINO_D2; // - LAM MOTOR CONTROLLER PIN CN3 - PIN5 (DI2)
+const byte MOTOR_START = CONTROLLINO_D3; // ---------- LAM MOTOR CONTROLLER PIN CN3 - PIN7 (DI3)
 
 // INPUT PINS
 const byte MOTOR_STOPPED = CONTROLLINO_A5; // -------- LAM MOTOR CONTROLLER PIN CN3 - 9
@@ -128,6 +137,14 @@ bool safety_door_is_closed() {
     safety_door_closed = true;
   }
   return safety_door_closed;
+}
+
+bool emergency_stop_is_active() {
+  bool is_active = false;
+  if (digitalRead(MOTOR_EMERGENCY_STOP) == LOW) {
+    is_active = true;
+  }
+  return is_active;
 }
 
 bool motor_has_stopped() {
@@ -236,6 +253,11 @@ void start_motor() //
   digitalWrite(MOTOR_START, HIGH);
 }
 
+void disable_start_motor_signal() //
+{
+  digitalWrite(MOTOR_START, LOW);
+}
+
 // INTERRUPT FOR ANGLE CALIBRATION *********************************************
 // THE ISR RUNS EVERY TIME THE ANGLE SENSOR DETECTS A TURN.
 void isr_calibrate_angle() {
@@ -259,6 +281,14 @@ void setup() {
   pinMode(MOTOR_STOP_PRECISE, OUTPUT);
   pinMode(MOTOR_EMERGENCY_STOP, OUTPUT);
 
+  // WAIT FOR THE MOTOR STOP POSITION OF THE MOTOR CONTROLLER
+  while (!motor_has_stopped()) //
+  {
+  };
+
+  reset_motor_stop_flag();
+  disable_emergency_stop();
+
   Serial.println("EXIT SETUP");
 }
 
@@ -274,8 +304,10 @@ void loop() {
   // IF SAFETY DOOR IS NOT CLOSED !!!
   // STOP MOTOR IMMEDIATELY       !!!
   if (!safety_door_is_closed() && !motor_has_stopped()) {
-    Serial.println("EMERGENCY STOP !!!!!!!!!!!!!!!!!!!!!!!!!!!");
     stage = EMERGENCY_STOP;
+    if (!emergency_stop_is_active()) { // print only once
+      Serial.println("EMERGENCY STOP !!!");
+    }
   }
 
   switch (stage) {
@@ -315,11 +347,13 @@ void loop() {
 
   case STOPPED:
     disable_motor();
+    disable_start_motor_signal();
     Serial.println("MOTOR STOPPED");
     stage = RESET;
     break;
 
   case EMERGENCY_STOP:
+    disable_start_motor_signal();
     enable_motor();
     initiate_emergency_stop();
     if (motor_has_stopped()) {
@@ -329,6 +363,7 @@ void loop() {
 
   case RESET:
     disable_motor();
+    disable_start_motor_signal();
     disable_emergency_stop();
     reset_motor_stop_flag();
     Serial.println("RESET COMPLETED, READY FOR NEXT RUN");
@@ -338,13 +373,12 @@ void loop() {
   default:
     break;
   }
+
   // measure_runtime();
 
   // if (print_delay.delay_time_is_up(500)) {
-  //   Serial.print("CURRENT ANGLE: ");
-  //   Serial.print(current_microstep_angle);
-  //   Serial.print(" | STEPS TO GO: ");
-  //   Serial.print(remaining_steps_to_go);
+  //   Serial.print("LOESCHMICHBALD: ");
+  //   Serial.print(loeschmichbald);
   //   Serial.println("");
   // }
 }

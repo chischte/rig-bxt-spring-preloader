@@ -41,61 +41,130 @@ AI1SLG = "1.5"
 ;
 ; >>> User Variable:
 ;
-VARIABLE = "microsteps_per_deg", 4    ;40961(0xA001)
-VARIABLE = "desired_deg", 4    ;40963(0xA003)
-VARIABLE = "desired_endposition", 4    ;40965(0xA005)
+VARIABLE = "desired_endposition", 4    ;40961(0xA001)
+VARIABLE = "max_crashfree_endpos", 3    ;40963(0xA003)
 ;
 ; >>> Application Program block:
 ;
 ;---------------------------------------------------------------> Block:1
+setup:
 Assign {
   Acceleration = 500
   MaxVel = 500
-  Deceleration = 1500
+  Deceleration = 500
+  ControlMode = POSITION_CNTMD
 }
+  "MAX ACCEL: 1000
+MAX DECEL: 1000
+MAX VEL:  700RPM / 0.25RPM = 2800
+TEST VEL: 500"
 ;
 ;
 ;---------------------------------------------------------------> Block:2
 Assign {
-  microsteps_per_deg = 71
-  desired_deg = 365
+  bEnable = DigitalInput(0)
+  DigitalOutput(0) = bInPosition
 }
-  "71.1111"
 ;
 ;
 ;---------------------------------------------------------------> Block:3
-  Resolve desired_endposition = microsteps_per_deg * desired_deg
+assign_positions:
+Assign {
+  desired_endposition = 51200
+  max_crashfree_endpos = 409600
+}
+  "Desired Posiion:
+2 Turns x 200 steps x 128 microsteps = 51200
+
+Max Crashfree Endposition: (hardcrash 23.5 turns)
+16turns x 200steps x 128microsteps = 409600
+
+"
 ;
 ;
 ;---------------------------------------------------------------> Block:4
-Assign {
-  ControlMode = POSITION_CNTMD
-  bEnable = TRUE_BOOL
-}
+mainLoop:
+  Wait Until DigitalInput(3) = 0
+  "DI0 = ENABLE
+DI1 = MOTOR STOP PRECISE
+DI2 = MOTOR EMERGENCY STOP
+DI3 = MOTOR START"
 ;
 ;
 ;---------------------------------------------------------------> Block:5
-mainLoop:
-Assign {
-  TargetPos = desired_endposition
-}
+  Wait Until DigitalInput(3) = 1
+  "DI0 = ENABLE
+DI1 = MOTOR STOP PRECISE
+DI2 = MOTOR EMERGENCY STOP
+DI3 = MOTOR START"
 ;
 ;
 ;---------------------------------------------------------------> Block:6
-  Wait Until bInPosition = 1
-;
-;
-;---------------------------------------------------------------> Block:7
 Assign {
-  TargetPos = 0
+  CPosition = 0
+  TargetPos = max_crashfree_endpos
 }
 ;
 ;
+;---------------------------------------------------------------> Block:7
+wait_for_plc_signal:
+  Jump to emergency_stop if DigitalInput(2) = 0
+;
+;
 ;---------------------------------------------------------------> Block:8
-  Wait Until bInPosition = 1
+  Jump to precise_stop if DigitalInput(1) = 1
 ;
 ;
 ;---------------------------------------------------------------> Block:9
+  Jump to wait_for_plc_signal always
+;
+;
+;---------------------------------------------------------------> Block:10
+emergency_stop:
+Assign {
+  CPosition = 0
+  TargetPos = 0
+}
+  "Decelerate in one turn:
+1 x 200 x 128"
+;
+;
+;---------------------------------------------------------------> Block:11
+  Wait Until Velocity < 10
+;
+;
+;---------------------------------------------------------------> Block:12
+Assign {
+  CPosition = 0
+  TargetPos = 0
+}
+  "Decelerate in one turn:
+1 x 200 x 128"
+;
+;
+;---------------------------------------------------------------> Block:13
+  Wait Until bInPosition = 1
+;
+;
+;---------------------------------------------------------------> Block:14
+  Jump to mainLoop always
+;
+;
+;---------------------------------------------------------------> Block:15
+precise_stop:
+Assign {
+  CPosition = 0
+  TargetPos = desired_endposition
+}
+  "Decelerate in one turn:
+1 x 200 x 128"
+;
+;
+;---------------------------------------------------------------> Block:16
+  Wait Until bInPosition = 1
+;
+;
+;---------------------------------------------------------------> Block:17
   Jump to mainLoop always
 ;
 ;
@@ -103,4 +172,4 @@ Assign {
 ;%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 ;LAM Technologies - 50019 Sesto Fiorentino (FI) ITALY - www.lamtechnologies.com
 ;%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-;24.07.2024 17:07:40
+;25.07.2024 12:36:10
