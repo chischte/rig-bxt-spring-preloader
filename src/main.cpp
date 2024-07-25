@@ -115,16 +115,13 @@ const byte MOTOR_EMERGENCY_STOP = CONTROLLINO_D2; // - LAM MOTOR CONTROLLER PIN 
 const byte MOTOR_START = CONTROLLINO_D3; // ---------- LAM MOTOR CONTROLLER PIN CN3 - PIN7 (DI3)
 
 // INPUT PINS
-const byte MOTOR_STOPPED = CONTROLLINO_A5; // -------- LAM MOTOR CONTROLLER PIN CN3 - 9
+const byte MOTOR_STOPPED = CONTROLLINO_A5; // -------- LAM MOTOR CONTROLLER PIN CN3 - 9 (DO0)
 const byte LENGTH_SENSOR = CONTROLLINO_A1; // LAM MOTOR CONTROLLER PIN CN3
 const byte DOOR_SENSOR_FRONT = CONTROLLINO_A2;
 const byte DOOR_SENSOR_REAR = CONTROLLINO_A3;
 
 // INPUT INTERRUPT PINS
 const byte ANGLE_SENSOR = CONTROLLINO_IN0; // --> INTERRUPT PIN
-
-// INTERRUPT FOR ANGLE SENSOR
-volatile bool angle_calibrated = false;
 
 // RUNTIME
 unsigned long runtime_start;
@@ -147,13 +144,13 @@ bool emergency_stop_is_active() {
   return is_active;
 }
 
-bool motor_has_stopped() {
-  bool motor_stopped = false;
+bool motor_is_turning() {
+  bool is_turning = true;
 
   if (digitalRead(MOTOR_STOPPED) == HIGH) {
-    motor_stopped = true;
+    is_turning = false;
   }
-  return motor_stopped;
+  return is_turning;
 }
 
 bool length_sensor_has_detected() {
@@ -162,6 +159,14 @@ bool length_sensor_has_detected() {
     sensor_detected = true;
   }
   return sensor_detected;
+}
+
+bool motor_stop_flag_is_set() {
+  bool isr_detected = false;
+  if (digitalRead(MOTOR_STOP_PRECISE)) {
+    isr_detected = true;
+  }
+  return isr_detected;
 }
 
 void measure_runtime() {
@@ -235,7 +240,7 @@ void enable_motor() //
 
 void disable_motor() //
 {
-  digitalWrite(MOTOR_ENABLE, LOW);
+  //digitalWrite(MOTOR_ENABLE, LOW);
 }
 
 void initiate_emergency_stop() {
@@ -282,12 +287,17 @@ void setup() {
   pinMode(MOTOR_EMERGENCY_STOP, OUTPUT);
 
   // WAIT FOR THE MOTOR STOP POSITION OF THE MOTOR CONTROLLER
-  while (!motor_has_stopped()) //
-  {
-  };
+
+  Serial.println("WAITING FOR MOTOR TO STOP");
+  // while (!motor_is_turning()) //
+  // {
+  // };
 
   reset_motor_stop_flag();
   disable_emergency_stop();
+
+  // REMOVE THIS LATER ON:
+  enable_motor();
 
   Serial.println("EXIT SETUP");
 }
@@ -299,14 +309,23 @@ void loop() {
   runtime_start = micros();
 
   enum stage_names { READY, ACCELERATE, BRAKE_IF_ISR, STOPPED, EMERGENCY_STOP, RESET };
-  static int stage = RESET;
+  static int stage = STOPPED;
 
   // IF SAFETY DOOR IS NOT CLOSED !!!
   // STOP MOTOR IMMEDIATELY       !!!
-  if (!safety_door_is_closed() && !motor_has_stopped()) {
+  if (!safety_door_is_closed() && motor_is_turning()) {
     stage = EMERGENCY_STOP;
     if (!emergency_stop_is_active()) { // print only once
-      Serial.println("EMERGENCY STOP !!!");
+      Serial.println("DOOR - EMERGENCY STOP !!!");
+    }
+  }
+
+  // IF SAFETY DOOR IS NOT CLOSED AND MOTOR HAS STOPPED
+  // RESET RIG       !!!
+  if (!safety_door_is_closed() && !motor_is_turning()) {
+    stage = RESET;
+    if (!emergency_stop_is_active()) { // print only once
+      Serial.println("DOOR OPEN - RESET");
     }
   }
 
@@ -315,31 +334,40 @@ void loop() {
   case READY:
     disable_motor();
 
+    if (length_sensor_has_detected() && safety_door_is_closed()) {
+      Serial.println("CANNOT START, SLEDGE IS NOT IN START POSITION!");
+    }
+
     if (!length_sensor_has_detected() && safety_door_is_closed()) {
-      Serial.println("ACCELERATE!");
-      motor_timeout.reset_time();
+      Serial.println("ACCELERATE! ... BRAKE IF ISR");
       stage = ACCELERATE;
     }
+    motor_timeout.reset_time();
     break;
 
   case ACCELERATE:
     enable_motor();
     start_motor();
-    Serial.println("BRAKE!");
     motor_timeout.reset_time();
+
     stage = BRAKE_IF_ISR;
+
     break;
 
   case BRAKE_IF_ISR:
 
     // ISR IS TELLING MOTOR CONTROLLER WHEN TO START DECELERATION
 
-    if (motor_timeout.has_timed_out()) {
-      Serial.println("TIMEOUT, EMERGENCY STOP!");
-      stage = EMERGENCY_STOP;
+    // if (motor_timeout.has_timed_out()) {
+    //   Serial.println("TIMEOUT, EMERGENCY STOP!");
+    //   stage = EMERGENCY_STOP;
+    // }
+    if (motor_stop_flag_is_set()) {
+      Serial.println("ISR DETECTED");
     }
 
-    if (motor_has_stopped()) {
+    if (!motor_is_turning()) {
+      delay(1000);
       Serial.println("DECELERATION COMPLETED");
       stage = STOPPED;
     }
@@ -348,17 +376,19 @@ void loop() {
   case STOPPED:
     disable_motor();
     disable_start_motor_signal();
-    Serial.println("MOTOR STOPPED");
-    stage = RESET;
-    break;
 
-  case EMERGENCY_STOP:
-    disable_start_motor_signal();
-    enable_motor();
-    initiate_emergency_stop();
-    if (motor_has_stopped()) {
+    if (!motor_is_turning()) {
+      delay(1000);
+      Serial.println("MOTOR STOPPED");
+      stage = STOPPED;
+    }
+
+    // USER HAS TO OPEN DOOR TO RESET MACHINE:
+    if (!safety_door_is_closed()) {
+      Serial.println("DOOR OPENED - RESET MACHINE");
       stage = RESET;
-    };
+    }
+
     break;
 
   case RESET:
@@ -366,8 +396,20 @@ void loop() {
     disable_start_motor_signal();
     disable_emergency_stop();
     reset_motor_stop_flag();
+    delay(500);
     Serial.println("RESET COMPLETED, READY FOR NEXT RUN");
     stage = READY;
+    delay(1000);
+    break;
+
+  case EMERGENCY_STOP:
+    disable_start_motor_signal();
+    enable_motor();
+    initiate_emergency_stop();
+    if (motor_is_turning()) {
+      Serial.println("EMERGENCY STOP COMPLETE JUMP TO RESET");
+      stage = RESET;
+    };
     break;
 
   default:
