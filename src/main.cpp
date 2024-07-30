@@ -69,14 +69,13 @@
  * SPECIAL EVENTS
  * --------------
  * 
- * •) DOOR opens while motor is running -> PLC sends emergency stop signal DRIVER!
+ * •) DOOR opens while motor is running -> PLC disables MOTOR, MOTOR stopps immediately!
  * 
  * •) LENGTH sensor detects already when user closes door
  * -> Spring already compressed, MOTOR must not start to turn
  * 
  * •) MOTOR runs to long
  * -> Mechanical or electrical malfungction, stop motor.
- * -> use timeout
  * 
  * *****************************************************************************
  * RUNTIME ON CONTROLLINO MAXI
@@ -100,8 +99,8 @@
 
 Insomnia print_delay;
 
-int max_motor_runtime = 5000; // [ms]
-Insomnia motor_timeout(max_motor_runtime);
+// int max_motor_runtime = 5000; // [ms]
+// Insomnia motor_timeout(max_motor_runtime);
 
 // GLOBAL VARIABLES ------------------------------------------------------------
 
@@ -111,8 +110,8 @@ Insomnia motor_timeout(max_motor_runtime);
 // OUTPUT PINS:
 const byte MOTOR_ENABLE = CONTROLLINO_D0; // --------- LAM MOTOR CONTROLLER PIN CN3 - PIN1 (DI0)
 const byte MOTOR_SET_NEW_POSITION = CONTROLLINO_D1; // --- LAM MOTOR CONTROLLER PIN CN3 - PIN3 (DI1)
-const byte MOTOR_EMERGENCY_STOP = CONTROLLINO_D2; // - LAM MOTOR CONTROLLER PIN CN3 - PIN5 (DI2)
-const byte MOTOR_START = CONTROLLINO_D3; // ---------- LAM MOTOR CONTROLLER PIN CN3 - PIN7 (DI3)
+// const byte MOTOR_EMERGENCY_STOP = CONTROLLINO_D2; // - LAM MOTOR CONTROLLER PIN CN3 - PIN5 (DI2)
+// const byte MOTOR_START = CONTROLLINO_D3; // ---------- LAM MOTOR CONTROLLER PIN CN3 - PIN7 (DI3)
 
 // INPUT PINS
 const byte MOTOR_STOPPED = CONTROLLINO_A5; // -------- LAM MOTOR CONTROLLER PIN CN3 - 9 (DO0)
@@ -136,37 +135,12 @@ bool safety_door_is_closed() {
   return safety_door_closed;
 }
 
-bool emergency_stop_is_active() {
-  bool is_active = false;
-  if (digitalRead(MOTOR_EMERGENCY_STOP) == LOW) {
-    is_active = true;
-  }
-  return is_active;
-}
-
-bool motor_is_turning() {
-  bool is_turning = true;
-
-  if (digitalRead(MOTOR_STOPPED) == HIGH) {
-    is_turning = false;
-  }
-  return is_turning;
-}
-
 bool length_sensor_has_detected() {
   bool sensor_detected = false;
   if (digitalRead(LENGTH_SENSOR) == LOW) {
     sensor_detected = true;
   }
   return sensor_detected;
-}
-
-bool motor_stop_flag_is_set() {
-  bool isr_detected = false;
-  if (digitalRead(MOTOR_SET_NEW_POSITION)) {
-    isr_detected = true;
-  }
-  return isr_detected;
 }
 
 void measure_runtime() {
@@ -243,26 +217,6 @@ void disable_motor() //
   //digitalWrite(MOTOR_ENABLE, LOW);
 }
 
-void initiate_emergency_stop() {
-  enable_motor();
-  digitalWrite(MOTOR_EMERGENCY_STOP, LOW);
-}
-
-void disable_emergency_stop() //
-{
-  digitalWrite(MOTOR_EMERGENCY_STOP, HIGH);
-}
-
-void start_motor() //
-{
-  digitalWrite(MOTOR_START, HIGH);
-}
-
-void disable_start_motor_signal() //
-{
-  digitalWrite(MOTOR_START, LOW);
-}
-
 // INTERRUPT FOR ANGLE CALIBRATION *********************************************
 // THE ISR RUNS EVERY TIME THE ANGLE SENSOR DETECTS A TURN.
 void isr_calibrate_angle() {
@@ -284,21 +238,10 @@ void setup() {
   // OUTPUT PINS
   pinMode(MOTOR_ENABLE, OUTPUT);
   pinMode(MOTOR_SET_NEW_POSITION, OUTPUT);
-  pinMode(MOTOR_EMERGENCY_STOP, OUTPUT);
-
-  // WAIT FOR THE MOTOR STOP POSITION OF THE MOTOR CONTROLLER
-
-  Serial.println("WAITING FOR MOTOR TO STOP");
-  // while (!motor_is_turning()) //
-  // {
-  // };
-
-  reset_motor_stop_flag();
-  disable_emergency_stop();
 
   // REMOVE THIS LATER ON:
-  enable_motor();
 
+  // reset_motor_stop_flag();
   Serial.println("EXIT SETUP");
 }
 
@@ -308,108 +251,38 @@ void loop() {
 
   runtime_start = micros();
 
-  enum stage_names { READY, ACCELERATE, BRAKE_IF_ISR, STOPPED, EMERGENCY_STOP, RESET };
-  static int stage = STOPPED;
-
-  // IF SAFETY DOOR IS NOT CLOSED !!!
-  // STOP MOTOR IMMEDIATELY       !!!
-  if (!safety_door_is_closed() && motor_is_turning()) {
-    stage = EMERGENCY_STOP;
-    if (!emergency_stop_is_active()) { // print only once
-      Serial.println("DOOR - EMERGENCY STOP !!!");
-    }
-  }
-
-  // IF SAFETY DOOR IS NOT CLOSED AND MOTOR HAS STOPPED
-  // RESET RIG       !!!
-  if (!safety_door_is_closed() && !motor_is_turning()) {
-    stage = RESET;
-    if (!emergency_stop_is_active()) { // print only once
-      Serial.println("DOOR OPEN - RESET");
-    }
-  }
+  enum stage_names { DOOR_OPEN, DOOR_CLOSED };
+  static int stage = DOOR_OPEN;
 
   switch (stage) {
 
-  case READY:
+  case DOOR_OPEN:
     disable_motor();
 
     if (length_sensor_has_detected() && safety_door_is_closed()) {
       Serial.println("CANNOT START, SLEDGE IS NOT IN START POSITION!");
+      delay(500);
     }
 
     if (!length_sensor_has_detected() && safety_door_is_closed()) {
-      Serial.println("ACCELERATE! ... BRAKE IF ISR");
-      stage = ACCELERATE;
+      Serial.println("DOOR_CLOSED");
+      enable_motor();
+      stage = DOOR_CLOSED;
     }
-    motor_timeout.reset_time();
     break;
 
-  case ACCELERATE:
-    enable_motor();
-    start_motor();
-    motor_timeout.reset_time();
-
-    stage = BRAKE_IF_ISR;
-
-    break;
-
-  case BRAKE_IF_ISR:
+  case DOOR_CLOSED:
 
     // ISR IS TELLING MOTOR CONTROLLER WHEN TO START DECELERATION
 
-    // if (motor_timeout.has_timed_out()) {
-    //   Serial.println("TIMEOUT, EMERGENCY STOP!");
-    //   stage = EMERGENCY_STOP;
-    // }
-    if (motor_stop_flag_is_set()) {
-      Serial.println("ISR DETECTED");
-    }
-
-    if (!motor_is_turning()) {
-      delay(1000);
-      Serial.println("DECELERATION COMPLETED");
-      stage = STOPPED;
-    }
-    break;
-
-  case STOPPED:
-    disable_motor();
-    disable_start_motor_signal();
-
-    if (!motor_is_turning()) {
-      delay(1000);
-      Serial.println("MOTOR STOPPED");
-      stage = STOPPED;
-    }
-
     // USER HAS TO OPEN DOOR TO RESET MACHINE:
     if (!safety_door_is_closed()) {
-      Serial.println("DOOR OPENED - RESET MACHINE");
-      stage = RESET;
+      disable_motor();
+      reset_motor_stop_flag();
+      Serial.println("DOOR OPENED");
+      delay(500);
+      stage = DOOR_OPEN;
     }
-
-    break;
-
-  case RESET:
-    disable_motor();
-    disable_start_motor_signal();
-    disable_emergency_stop();
-    reset_motor_stop_flag();
-    delay(500);
-    Serial.println("RESET COMPLETED, READY FOR NEXT RUN");
-    stage = READY;
-    delay(1000);
-    break;
-
-  case EMERGENCY_STOP:
-    disable_start_motor_signal();
-    enable_motor();
-    initiate_emergency_stop();
-    if (motor_is_turning()) {
-      Serial.println("EMERGENCY STOP COMPLETE JUMP TO RESET");
-      stage = RESET;
-    };
     break;
 
   default:
