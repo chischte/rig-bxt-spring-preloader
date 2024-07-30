@@ -110,7 +110,7 @@ Insomnia motor_timeout(max_motor_runtime);
 
 // OUTPUT PINS:
 const byte MOTOR_ENABLE = CONTROLLINO_D0; // --------- LAM MOTOR CONTROLLER PIN CN3 - PIN1 (DI0)
-const byte MOTOR_STOP_PRECISE = CONTROLLINO_D1; // --- LAM MOTOR CONTROLLER PIN CN3 - PIN3 (DI1)
+const byte MOTOR_SET_NEW_POSITION = CONTROLLINO_D1; // --- LAM MOTOR CONTROLLER PIN CN3 - PIN3 (DI1)
 const byte MOTOR_EMERGENCY_STOP = CONTROLLINO_D2; // - LAM MOTOR CONTROLLER PIN CN3 - PIN5 (DI2)
 const byte MOTOR_START = CONTROLLINO_D3; // ---------- LAM MOTOR CONTROLLER PIN CN3 - PIN7 (DI3)
 
@@ -163,7 +163,7 @@ bool length_sensor_has_detected() {
 
 bool motor_stop_flag_is_set() {
   bool isr_detected = false;
-  if (digitalRead(MOTOR_STOP_PRECISE)) {
+  if (digitalRead(MOTOR_SET_NEW_POSITION)) {
     isr_detected = true;
   }
   return isr_detected;
@@ -225,12 +225,12 @@ void measure_runtime() {
 
 void set_motor_stop_flag() //
 {
-  digitalWrite(MOTOR_STOP_PRECISE, HIGH);
+  digitalWrite(MOTOR_SET_NEW_POSITION, HIGH);
 }
 
 void reset_motor_stop_flag() //
 {
-  digitalWrite(MOTOR_STOP_PRECISE, LOW);
+  digitalWrite(MOTOR_SET_NEW_POSITION, LOW);
 }
 
 void enable_motor() //
@@ -283,7 +283,7 @@ void setup() {
 
   // OUTPUT PINS
   pinMode(MOTOR_ENABLE, OUTPUT);
-  pinMode(MOTOR_STOP_PRECISE, OUTPUT);
+  pinMode(MOTOR_SET_NEW_POSITION, OUTPUT);
   pinMode(MOTOR_EMERGENCY_STOP, OUTPUT);
 
   // WAIT FOR THE MOTOR STOP POSITION OF THE MOTOR CONTROLLER
