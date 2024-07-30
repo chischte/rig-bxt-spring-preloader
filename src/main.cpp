@@ -16,14 +16,12 @@
  * PLC runtime should be small, preferably <100us, so that angle measurements
  * are precise enough.
  * 
- * The maximum possible turns on the thread are 23.5, if the motor turns more often
- * the parts crash mechanically
- * 
- * The desired number of turns for the correct spring length of 40.5 are:
- *  11.5 turns
- * 
- * The steper driver is therefore limited to make maximum 16 Turns
- * 16 Turns x 128 microsteps per step x 200 steps per turn = Max position 409600
+ * TURNS | NEW POS | ACTION 
+ *  0.0       -      MOTOR STARTS TO TURN
+ *  4.0  ->  0.0     SENSOR DETECTS PLC SETS NEW POSITION
+ *  7.3 -----------> MOTOR STOPPS IF SENSOR DID NOT DETECT
+ * 11.8      7.8     DESIRED PRECISE MOTOR STOP SPRING LENGTH 40.5
+ * 23.5 -----------> MECHANICAL CRASH
  * 
  * *****************************************************************************
  * COMPONENTS
@@ -48,20 +46,13 @@
  * 
  * •) PLC checks if DOOR is closed and LENGTH sensor does not detect yet
  * 
- * •) PLC enables informs DRIVER to enabble and accelerate MOTOR
+ * •) PLC enables DRIVER, DRIVER accelerates MOTOR
  * 
  * •) PLC detects LENGTH -> PLC waits for next ANGLE
  *
- * •) PLC detects ANGLE -> DRIVER calculates and sets target position
- *    -> keep in loop calculations as slim as possible
+ * •) PLC detects ANGLE -> DRIVER calculates and sets new target position
  *
  * •) DRIVER stops MOTOR at target position
- * 
- * •) DRIVER informs PLC that MOTOR stopped
- * 
- * •) PLC disables MOTOR
- *
- * •) DRIVER resets
  * 
  * •) USER opens DOOR -> PLC resets
  * 
@@ -74,12 +65,9 @@
  * •) LENGTH sensor detects already when user closes door
  * -> Spring already compressed, MOTOR must not start to turn
  * 
- * •) MOTOR runs to long
- * -> Mechanical or electrical malfungction, stop motor.
- * 
  * *****************************************************************************
  * RUNTIME ON CONTROLLINO MAXI
- * 2023-08-23 MIN44 AVG48 MAX68 [us]
+ * 2024-07-30 MIN12 AVG14 MAX20 [us]
  * *****************************************************************************
  *  * 
  * *****************************************************************************
@@ -99,19 +87,14 @@
 
 Insomnia print_delay;
 
-// int max_motor_runtime = 5000; // [ms]
-// Insomnia motor_timeout(max_motor_runtime);
-
 // GLOBAL VARIABLES ------------------------------------------------------------
 
 // I/O-PINS:
 // INPUTS:
 
 // OUTPUT PINS:
-const byte MOTOR_ENABLE = CONTROLLINO_D0; // --------- LAM MOTOR CONTROLLER PIN CN3 - PIN1 (DI0)
-const byte MOTOR_SET_NEW_POSITION = CONTROLLINO_D1; // --- LAM MOTOR CONTROLLER PIN CN3 - PIN3 (DI1)
-// const byte MOTOR_EMERGENCY_STOP = CONTROLLINO_D2; // - LAM MOTOR CONTROLLER PIN CN3 - PIN5 (DI2)
-// const byte MOTOR_START = CONTROLLINO_D3; // ---------- LAM MOTOR CONTROLLER PIN CN3 - PIN7 (DI3)
+const byte MOTOR_ENABLE = CONTROLLINO_D0; // ----------- LAM MOTOR CONTROLLER PIN CN3 - PIN1 (DI0)
+const byte MOTOR_SET_NEW_POSITION = CONTROLLINO_D1; // - LAM MOTOR CONTROLLER PIN CN3 - PIN3 (DI1)
 
 // INPUT PINS
 const byte MOTOR_STOPPED = CONTROLLINO_A5; // -------- LAM MOTOR CONTROLLER PIN CN3 - 9 (DO0)
@@ -126,22 +109,6 @@ const byte ANGLE_SENSOR = CONTROLLINO_IN0; // --> INTERRUPT PIN
 unsigned long runtime_start;
 
 // FUNCTIONS *******************************************************************
-
-bool safety_door_is_closed() {
-  bool safety_door_closed = false;
-  if (digitalRead(DOOR_SENSOR_FRONT) && digitalRead(DOOR_SENSOR_REAR)) {
-    safety_door_closed = true;
-  }
-  return safety_door_closed;
-}
-
-bool length_sensor_has_detected() {
-  bool sensor_detected = false;
-  if (digitalRead(LENGTH_SENSOR) == LOW) {
-    sensor_detected = true;
-  }
-  return sensor_detected;
-}
 
 void measure_runtime() {
 
@@ -186,7 +153,7 @@ void measure_runtime() {
     Serial.print("MAX RUNTIME [us]: ");
     Serial.println(max_runtime);
 
-    delay(5000);
+    delay(1000);
 
     // RESET VALUES
     number_of_cycles_measured = 0;
@@ -197,12 +164,28 @@ void measure_runtime() {
   }
 }
 
-void set_motor_stop_flag() //
+bool safety_door_is_closed() {
+  bool safety_door_closed = false;
+  if (digitalRead(DOOR_SENSOR_FRONT) && digitalRead(DOOR_SENSOR_REAR)) {
+    safety_door_closed = true;
+  }
+  return safety_door_closed;
+}
+
+bool length_sensor_has_detected() {
+  bool sensor_detected = false;
+  if (digitalRead(LENGTH_SENSOR) == LOW) {
+    sensor_detected = true;
+  }
+  return sensor_detected;
+}
+
+void set_motor_position_flag() //
 {
   digitalWrite(MOTOR_SET_NEW_POSITION, HIGH);
 }
 
-void reset_motor_stop_flag() //
+void reset_motor_position_flag() //
 {
   digitalWrite(MOTOR_SET_NEW_POSITION, LOW);
 }
@@ -214,14 +197,15 @@ void enable_motor() //
 
 void disable_motor() //
 {
-  //digitalWrite(MOTOR_ENABLE, LOW);
+  digitalWrite(MOTOR_ENABLE, LOW);
 }
 
 // INTERRUPT FOR ANGLE CALIBRATION *********************************************
-// THE ISR RUNS EVERY TIME THE ANGLE SENSOR DETECTS A TURN.
+// RUNS EVERY TIME THE ANGLE SENSOR DETECTS A TURN
+
 void isr_calibrate_angle() {
   if (length_sensor_has_detected()) {
-    set_motor_stop_flag();
+    set_motor_position_flag();
   }
 }
 
@@ -239,10 +223,12 @@ void setup() {
   pinMode(MOTOR_ENABLE, OUTPUT);
   pinMode(MOTOR_SET_NEW_POSITION, OUTPUT);
 
-  // REMOVE THIS LATER ON:
-
-  // reset_motor_stop_flag();
   Serial.println("EXIT SETUP");
+
+  while(safety_door_is_closed()){
+    // wait for user to open door
+    // this prevents motor start during reset or startup
+  }
 }
 
 // LOOP ************************************************************************
@@ -278,7 +264,7 @@ void loop() {
     // USER HAS TO OPEN DOOR TO RESET MACHINE:
     if (!safety_door_is_closed()) {
       disable_motor();
-      reset_motor_stop_flag();
+      reset_motor_position_flag();
       Serial.println("DOOR OPENED");
       delay(500);
       stage = DOOR_OPEN;
@@ -289,13 +275,7 @@ void loop() {
     break;
   }
 
-  // measure_runtime();
-
-  // if (print_delay.delay_time_is_up(500)) {
-  //   Serial.print("LOESCHMICHBALD: ");
-  //   Serial.print(loeschmichbald);
-  //   Serial.println("");
-  // }
+  // measure_runtime(); // deactivate in production
 }
 
 // ********************************************************** END OF PROGRAM ***
