@@ -19,10 +19,11 @@
  * TURNS | NEW POS | ACTION 
  *  0.0       -      MOTOR STARTS TO TURN
  *  4.0  ->  0.0     SENSOR DETECTS PLC SETS NEW POSITION
- *  7.3 -----------> MOTOR STOPPS IF SENSOR DID NOT DETECT
- * 11.8      7.8     DESIRED PRECISE MOTOR STOP SPRING LENGTH 40.5
- * 23.5 -----------> MECHANICAL CRASH
- * 
+ *  8.5 -----------> MOTOR STOP POSITION IF SENSOR DID NOT DETECT
+ * (8.8)     4.8     DESIRED PRECISE MOTOR STOP SPRING LENGTH 37-37.5mm
+ * 11.0 -----------> MECHANICAL CRASH !!!
+ * ---> EXACT VALUES ARE TO BE FOUND IN UPC COMMANDER MOTOR CONTROLLER AND
+ * ---> rig-spring-preloader.xls SPREADSHEET TAB "turn calculator"
  * *****************************************************************************
  * COMPONENTS
  * *****************************************************************************
